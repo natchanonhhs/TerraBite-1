@@ -35,6 +35,16 @@
         </div>
     </header>
 
+    <!-- พื้นที่แสดงป้ายโฆษณา (Banners) ดึงจากระบบหลังบ้าน -->
+    <div id="banner-container" class="max-w-md mx-auto relative overflow-hidden bg-white hidden border-b border-slate-100 shadow-sm">
+        <div id="banner-slider" class="flex transition-transform duration-500 ease-in-out">
+            <!-- ป้ายโฆษณาจะถูกโหลดที่นี่ -->
+        </div>
+        <!-- จุดบอกตำแหน่งโฆษณา -->
+        <div id="banner-indicators" class="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5 z-10">
+        </div>
+    </div>
+
     <!-- พื้นที่โชว์คูปองด้านบนสุด (เฉพาะคูปองที่ตั้งให้แสดง) -->
     <div class="max-w-md mx-auto px-4 py-4 hidden" id="coupon-showcase-container">
         <h3 class="font-bold text-sm text-slate-700 mb-2"><i class="fas fa-ticket-alt text-amber-500 mr-1"></i> โค้ดส่วนลด / โปรโมชั่น</h3>
@@ -44,13 +54,13 @@
     </div>
 
     <!-- พื้นที่แสดงเมนูอาหาร -->
-    <main class="max-w-md mx-auto px-4 pb-4" id="menu-container">
+    <main class="max-w-md mx-auto px-4 pb-4 mt-2" id="menu-container">
         <div class="text-center py-10 text-slate-400"><i class="fas fa-spinner fa-spin text-2xl mb-2"></i><p>กำลังโหลดเมนู...</p></div>
     </main>
 
     <!-- ปุ่มบริการเสริม (เรียกพนักงาน) -->
     <div class="fixed bottom-32 right-4 z-20">
-        <button onclick="callStaff()" class="bg-amber-500 text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-xl hover:bg-amber-600 transition-colors">
+        <button onclick="callStaff(event)" class="bg-amber-500 text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-xl hover:bg-amber-600 transition-colors">
             <i class="fas fa-bell"></i>
         </button>
     </div>
@@ -76,7 +86,7 @@
                     <p class="text-xl font-bold text-emerald-600">฿<span id="cart-total">0</span></p>
                 </div>
                 <div class="flex gap-2">
-                    <button onclick="requestBill()" class="bg-slate-100 text-slate-600 px-4 py-3 rounded-xl font-bold text-sm hover:bg-slate-200">เช็คบิล</button>
+                    <button onclick="requestBill(event)" class="bg-slate-100 text-slate-600 px-4 py-3 rounded-xl font-bold text-sm hover:bg-slate-200">เช็คบิล</button>
                     <button onclick="submitDineInOrder()" id="btn-submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-xl font-bold shadow-md flex items-center gap-2">
                         ส่งเข้าครัว <i class="fas fa-utensils"></i>
                     </button>
@@ -126,7 +136,10 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        const TABLE_NUMBER = "01"; 
+        // สามารถตั้งค่าเลขโต๊ะแบบไดนามิกได้จาก URL Parameter เช่น ?table=05
+        const urlParams = new URLSearchParams(window.location.search);
+        const TABLE_NUMBER = urlParams.get('table') || "01"; 
+        
         document.getElementById('table-badge').innerText = `โต๊ะ ${TABLE_NUMBER}`;
         document.title = `สั่งอาหาร - โต๊ะ ${TABLE_NUMBER}`;
         
@@ -141,7 +154,84 @@
         let appliedDiscount = 0;
         let appliedCouponCode = '';
 
-        // ฟังก์ชันตรวจเช็คว่าคูปองยังใช้งานได้หรือไม่ (วัน-เวลา และโควต้า)
+        let allBanners = [];
+        let bannerIndex = 0;
+        let bannerInterval;
+
+        // 🟢 ระบบดึงป้ายโฆษณา (Banners)
+        const qBanner = query(collection(db, "banners"), orderBy("created_at", "desc"));
+        onSnapshot(qBanner, (snapshot) => {
+            allBanners = [];
+            const now = new Date();
+            snapshot.forEach(doc => {
+                const b = doc.data();
+                // ตรวจสอบวันหมดอายุโฆษณา
+                if (b.startDate && new Date(b.startDate) > now) return;
+                if (b.endDate && new Date(b.endDate) < now) return;
+                allBanners.push({ id: doc.id, ...b });
+            });
+            window.renderBanners();
+        });
+
+        window.renderBanners = () => {
+            const container = document.getElementById('banner-container');
+            const slider = document.getElementById('banner-slider');
+            const indicators = document.getElementById('banner-indicators');
+            
+            if (allBanners.length === 0) {
+                container.classList.add('hidden');
+                return;
+            }
+            
+            container.classList.remove('hidden');
+            
+            slider.innerHTML = allBanners.map(b => `
+                <div class="w-full flex-shrink-0 relative cursor-pointer" onclick="showBannerDetail('${b.id}')">
+                    <img src="${b.imgUrl}" class="w-full object-cover" style="aspect-ratio: 16/5;">
+                </div>
+            `).join('');
+
+            indicators.innerHTML = allBanners.map((_, i) => `
+                <div class="w-1.5 h-1.5 rounded-full transition-colors ${i === 0 ? 'bg-white' : 'bg-white/50 shadow'}"></div>
+            `).join('');
+
+            clearInterval(bannerInterval);
+            bannerIndex = 0;
+            
+            if (allBanners.length > 1) {
+                const timer = (allBanners[0].timer || 3) * 1000;
+                bannerInterval = setInterval(window.nextBanner, timer);
+            }
+        };
+
+        window.nextBanner = () => {
+            bannerIndex = (bannerIndex + 1) % allBanners.length;
+            window.updateBannerView();
+        };
+
+        window.updateBannerView = () => {
+            const slider = document.getElementById('banner-slider');
+            const indicators = document.getElementById('banner-indicators');
+            slider.style.transform = `translateX(-${bannerIndex * 100}%)`;
+            
+            Array.from(indicators.children).forEach((ind, i) => {
+                ind.className = `w-1.5 h-1.5 rounded-full transition-colors ${i === bannerIndex ? 'bg-white' : 'bg-white/50 shadow'}`;
+            });
+
+            clearInterval(bannerInterval);
+            const timer = (allBanners[bannerIndex].timer || 3) * 1000;
+            bannerInterval = setInterval(window.nextBanner, timer);
+        };
+
+        window.showBannerDetail = (id) => {
+            const b = allBanners.find(x => x.id === id);
+            if(b && b.detail) {
+                alert(b.detail);
+            }
+        };
+
+
+        // 🟢 ฟังก์ชันตรวจเช็คว่าคูปองยังใช้งานได้หรือไม่ (วัน-เวลา และโควต้า)
         const isCouponValid = (c) => {
             if(c.active === false) return false;
             const now = new Date();
@@ -247,9 +337,15 @@
                     ? `<button disabled class="px-4 py-1.5 rounded-full bg-slate-200 text-rose-500 font-bold text-sm cursor-not-allowed">หมด</button>`
                     : `<button onclick="window.openOptionModal('${item.id}')" class="px-4 py-1.5 rounded-full bg-emerald-50 text-emerald-600 font-bold text-sm hover:bg-emerald-500 hover:text-white transition-colors">เลือก <i class="fas fa-plus text-xs ml-1"></i></button>`;
                 
+                // การตรวจสอบป้ายสถานะสินค้า
+                const badgeHtml = item.badge ? `<span class="absolute top-2 left-2 bg-rose-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm z-10">${item.badge}</span>` : '';
+
                 container.innerHTML += `
                     <div class="bg-white rounded-2xl p-3 flex gap-4 mb-4 shadow-sm border border-slate-100 relative ${isOutOfStock ? 'opacity-60 grayscale-[50%]' : ''}">
-                        <img src="${item.img}" class="w-24 h-24 rounded-xl object-cover bg-slate-100">
+                        <div class="relative">
+                            ${badgeHtml}
+                            <img src="${item.img}" class="w-24 h-24 rounded-xl object-cover bg-slate-100">
+                        </div>
                         <div class="flex-1 flex flex-col justify-between py-1">
                             <div>
                                 <h3 class="font-bold text-slate-800 leading-tight">${item.name}</h3>
@@ -474,8 +570,47 @@
             }
         };
 
-        window.callStaff = () => alert(`พนักงานกำลังไปหาคุณที่ โต๊ะ ${TABLE_NUMBER} กรุณารอสักครู่ครับ`);
-        window.requestBill = () => alert(`รับทราบ! แคชเชียร์กำลังคำนวณยอดเงินของ โต๊ะ ${TABLE_NUMBER} เพื่อนำบิลมาให้ครับ`);
+        // 🟢 ฟังก์ชันส่งข้อมูลแจ้งเตือนพนักงานไปยังหลังบ้าน
+        window.callStaff = async (event) => {
+            const btn = event.currentTarget;
+            const origHTML = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            btn.disabled = true;
+            try {
+                // ส่งค่าลงตาราง table_calls ให้หลังบ้านจับเสียงกริ่งได้ทันที
+                await addDoc(collection(db, "table_calls"), {
+                    table: TABLE_NUMBER,
+                    timestamp: serverTimestamp()
+                });
+                alert(`พนักงานได้รับแจ้งเตือนจาก โต๊ะ ${TABLE_NUMBER} แล้ว กรุณารอสักครู่ครับ`);
+            } catch(e) {
+                alert('เกิดข้อผิดพลาดในการส่งแจ้งเตือน: ' + e.message);
+            } finally {
+                btn.innerHTML = origHTML;
+                btn.disabled = false;
+            }
+        };
+
+        // 🟢 ฟังก์ชันส่งข้อมูลแจ้งขอเช็คบิลไปยังหลังบ้าน
+        window.requestBill = async (event) => {
+            const btn = event.currentTarget;
+            const origHTML = btn.innerHTML;
+            btn.innerHTML = 'กำลังเรียก...';
+            btn.disabled = true;
+            try {
+                // ส่งค่าลงตาราง table_calls พร้อมวงเล็บต่อท้ายโต๊ะ
+                await addDoc(collection(db, "table_calls"), {
+                    table: TABLE_NUMBER + " (เรียกเช็คบิล)",
+                    timestamp: serverTimestamp()
+                });
+                alert(`รับทราบ! แคชเชียร์ได้รับการแจ้งเตือนของ โต๊ะ ${TABLE_NUMBER} เพื่อตรวจสอบและนำบิลมาให้แล้วครับ`);
+            } catch(e) {
+                alert('เกิดข้อผิดพลาดในการเรียกเช็คบิล: ' + e.message);
+            } finally {
+                btn.innerHTML = origHTML;
+                btn.disabled = false;
+            }
+        };
 
     </script>
 </body>
